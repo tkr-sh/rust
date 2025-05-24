@@ -281,3 +281,34 @@ pub const fn utf8_char_width(b: u8) -> usize {
 
 /// Mask of the value bits of a continuation byte.
 const CONT_MASK: u8 = 0b0011_1111;
+
+pub(super) const unsafe fn bytes_in_next_char_from_idx(str: &str, idx: usize) -> Option<u8> {
+    if str.len() <= idx {
+        return None;
+    }
+    let str_ptr = str.as_ptr();
+    let current_byte = unsafe { *str_ptr.add(idx) };
+    match current_byte {
+        0..128 => Some(1),
+        128..0xE0 => Some(2),
+        0xE0..0xF0 => Some(3),
+        0xF0..=0xFF => Some(4),
+    }
+}
+
+pub(super) const unsafe fn bytes_in_next_back_char_from_idx(str: &str, idx: usize) -> Option<u8> {
+    if str.len() <= idx {
+        return None;
+    }
+    let str_ptr = str.as_ptr();
+    let current_byte = unsafe { *str_ptr.add(idx) };
+    if current_byte < 128 {
+        Some(1)
+    } else if utf8_is_cont_byte(unsafe { *str_ptr.offset(idx as isize - 1) }) {
+        Some(2)
+    } else if utf8_is_cont_byte(unsafe { *str_ptr.offset(idx as isize - 2) }) {
+        Some(3)
+    } else {
+        Some(4)
+    }
+}

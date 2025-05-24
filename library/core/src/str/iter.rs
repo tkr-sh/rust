@@ -1,7 +1,10 @@
 //! Iterators for `str` methods.
 
 use super::pattern::{DoubleEndedSearcher, Pattern, ReverseSearcher, Searcher};
-use super::validations::{next_code_point, next_code_point_reverse};
+use super::validations::{
+    bytes_in_next_back_char_from_idx, bytes_in_next_char_from_idx, next_code_point,
+    next_code_point_reverse,
+};
 use super::{
     BytesIsNotEmpty, CharEscapeDebugContinue, CharEscapeDefault, CharEscapeUnicode,
     IsAsciiWhitespace, IsNotEmpty, IsWhitespace, LinesMap, UnsafeBytesToStr, from_utf8_unchecked,
@@ -1608,3 +1611,226 @@ macro_rules! escape_types_impls {
 }
 
 escape_types_impls!(EscapeDebug, EscapeDefault, EscapeUnicode);
+
+/// An iterator over chunks of a string slice as `&str` of length `chunk_size`,
+/// starting at the beginning of the slice.
+///
+/// The chunks do not overlap. If `chunk_size` does not divide the number of chars
+/// in the string slice, then the last chunk will not have length of `chunk_size`.
+///
+/// Since the items of the iterator are `&str`, this implies that the chunks
+/// are made of `chunk_size` [`char`]s and not of `u8`.
+///
+/// This `struct` is created by the [`chunks`][str::chunks] method on [`str`]. See
+/// its documentation for more.
+#[unstable(feature = "str_chunks", reason = "recently added", issue = "none")]
+#[derive(Debug, Clone)]
+pub struct Chunks<'l> {
+    s: &'l str,
+    chunk_size: usize,
+    /// Used for [`DoubleEndedIterator`]
+    is_rem_removed: bool,
+}
+
+#[unstable(feature = "str_chunks", reason = "recently added", issue = "none")]
+impl<'l> Chunks<'l> {
+    #[inline]
+    pub(super) fn new(s: &'l str, chunk_size: usize) -> Self {
+        Self { s, chunk_size, is_rem_removed: false }
+    }
+}
+
+#[unstable(feature = "str_chunks", reason = "recently added", issue = "none")]
+impl<'l> Iterator for Chunks<'l> {
+    type Item = &'l str;
+
+    #[inline]
+    fn next(&mut self) -> Option<&'l str> {
+        if self.s.is_empty() {
+            return None;
+        }
+
+        let mut nb_bytes = 0usize;
+        for _ in 0..self.chunk_size {
+            match unsafe { bytes_in_next_char_from_idx(self.s, nb_bytes) } {
+                Some(i_nb_bytes) => {
+                    nb_bytes += i_nb_bytes as usize;
+                }
+                None => break,
+            }
+        }
+
+        // SAFETY: just checked that `mid` is on a char boundary.
+        let (before, after) = unsafe { self.s.split_at_unchecked(nb_bytes) };
+        self.s = after;
+        Some(before)
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<&'l str> {
+        if self.s.is_empty() {
+            return None;
+        }
+
+        let mut nb_bytes_before_n = 0usize;
+        for _ in 0..(self.chunk_size * n) {
+            match unsafe { bytes_in_next_char_from_idx(self.s, nb_bytes_before_n) } {
+                Some(i_nb_bytes) => {
+                    nb_bytes_before_n += i_nb_bytes as usize;
+                }
+                None => return None,
+            }
+        }
+
+        let mut nb_bytes_of_n = 0usize;
+        for _ in 0..self.chunk_size {
+            match unsafe { bytes_in_next_char_from_idx(self.s, nb_bytes_before_n + nb_bytes_of_n) }
+            {
+                Some(i_nb_bytes) => {
+                    nb_bytes_of_n += i_nb_bytes as usize;
+                }
+                None => break,
+            }
+        }
+
+        // SAFETY: just checked that `mid` is on a char boundary.
+        let (before, after) =
+            unsafe { self.s.split_at_unchecked(nb_bytes_of_n + nb_bytes_before_n) };
+        self.s = after;
+
+        Some(&before[nb_bytes_before_n..])
+    }
+
+    #[inline]
+    fn last(self) -> Option<&'l str> {
+        if self.s.is_empty() {
+            return None;
+        }
+
+        let nb_chars = super::count::count_chars(self.s);
+        let chunk_size_or_rem = if nb_chars % self.chunk_size == 0 {
+            self.chunk_size
+        } else {
+            nb_chars % self.chunk_size
+        };
+
+        let mut nb_bytes = 0usize;
+        for _ in 0..chunk_size_or_rem {
+            match unsafe { bytes_in_next_back_char_from_idx(self.s, self.s.len() - 1 - nb_bytes) } {
+                Some(i_nb_bytes) => {
+                    nb_bytes += i_nb_bytes as usize;
+                    if self.s.len() == nb_bytes {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+
+        Some(&self.s[self.s.len() - nb_bytes..])
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.s.is_empty() {
+            (0, Some(0))
+        } else {
+            let len = self.s.len();
+            (len.div_ceil(4 * self.chunk_size), Some(len))
+        }
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        super::count::count_chars(self.s).div_ceil(self.chunk_size)
+    }
+}
+
+#[unstable(feature = "str_chunks", reason = "recently added", issue = "none")]
+impl<'l> DoubleEndedIterator for Chunks<'l> {
+    #[inline]
+    fn next_back(&mut self) -> Option<&'l str> {
+        if self.s.is_empty() {
+            return None;
+        }
+
+        let chunk_size_or_rem = if !self.is_rem_removed {
+            let nb_chars = super::count::count_chars(self.s);
+            self.is_rem_removed = true;
+            nb_chars % self.chunk_size
+        } else {
+            self.chunk_size
+        };
+
+        let mut nb_bytes = 0usize;
+        for _ in 0..chunk_size_or_rem {
+            match unsafe { bytes_in_next_back_char_from_idx(self.s, self.s.len() - 1 - nb_bytes) } {
+                Some(i_nb_bytes) => {
+                    nb_bytes += i_nb_bytes as usize;
+                    if self.s.len() == nb_bytes {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+
+        // SAFETY: just checked that `mid` is on a char boundary.
+        let (before, after) = unsafe { self.s.split_at_unchecked(self.s.len() - nb_bytes) };
+        self.s = before;
+        Some(after)
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<&'l str> {
+        if self.s.is_empty() {
+            return None;
+        }
+
+        let nb_chars = super::count::count_chars(self.s);
+        let chunk_size_or_rem = if nb_chars % self.chunk_size == 0 {
+            self.chunk_size
+        } else {
+            nb_chars % self.chunk_size
+        };
+
+        let mut nb_bytes_after_n = 0usize;
+        if n != 0 {
+            for _ in 0..self.chunk_size * n.saturating_sub(1) + chunk_size_or_rem {
+                match unsafe {
+                    bytes_in_next_back_char_from_idx(self.s, self.s.len() - 1 - nb_bytes_after_n)
+                } {
+                    Some(i_nb_bytes) => {
+                        nb_bytes_after_n += i_nb_bytes as usize;
+                        if self.s.len() == nb_bytes_after_n {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+        }
+
+        let mut nb_bytes_of_n = 0usize;
+        for _ in 0..(if n == 0 { chunk_size_or_rem } else { self.chunk_size }) {
+            match unsafe {
+                bytes_in_next_back_char_from_idx(self.s, self.s.len() - 1 - nb_bytes_of_n)
+            } {
+                Some(i_nb_bytes) => {
+                    nb_bytes_of_n += i_nb_bytes as usize;
+                    if self.s.len() == nb_bytes_of_n {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+
+        // SAFETY: just checked that `mid` is on a char boundary.
+        let (before, after) =
+            unsafe { self.s.split_at_unchecked(self.s.len() - nb_bytes_of_n - nb_bytes_after_n) };
+        self.s = before;
+
+        Some(&after[..nb_bytes_of_n])
+    }
+}

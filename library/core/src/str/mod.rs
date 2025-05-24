@@ -31,6 +31,8 @@ pub use converts::{from_utf8, from_utf8_unchecked};
 pub use converts::{from_utf8_mut, from_utf8_unchecked_mut};
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use error::{ParseBoolError, Utf8Error};
+#[unstable(feature = "str_chunks", reason = "recently added", issue = "none")]
+pub use iter::Chunks;
 #[stable(feature = "encode_utf16", since = "1.8.0")]
 pub use iter::EncodeUtf16;
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -1114,6 +1116,52 @@ impl str {
     #[inline]
     pub fn bytes(&self) -> Bytes<'_> {
         Bytes(self.as_bytes().iter().copied())
+    }
+
+    /// Returns an iterator over chunks of the string slice as `&str` of length
+    /// `chunk_size`, starting at the beginning of the slice.
+    ///
+    /// The chunks do not overlap. If `chunk_size` does not divide the number of chars
+    /// in the string slice, then the last chunk will not have length of `chunk_size`.
+    ///
+    /// Since the items of the iterator are `&str`, this implies that the chunks
+    /// are made of `chunk_size` [`char`]s and not of `u8`.
+    ///
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```
+    /// let word = "12345";
+    ///
+    /// let mut chunks = word.chunks(2);
+    ///
+    /// assert_eq!(Some("12"), chunks.next());
+    /// assert_eq!(Some("34"), chunks.next());
+    /// assert_eq!(Some("5"), chunks.next());
+    ///
+    /// assert_eq!(None, chunks.next());
+    /// ```
+    ///
+    /// Or with some non ASCII [`char`]s
+    ///
+    /// [`char`]: prim@char
+    ///
+    /// ```
+    /// let equation = "🦀 != 🦞🦐🐚";
+    ///
+    /// let mut chunks = equation.chunks(4);
+    ///
+    /// assert_eq!(Some("🦀 !="), chunks.next());
+    /// assert_eq!(Some(" 🦞🦐🐚"), chunks.next());
+    ///
+    /// assert_eq!(None, chunks.next());
+    /// ```
+    #[inline]
+    #[unstable(feature = "str_chunks", reason = "recently added", issue = "none")]
+    pub fn chunks(&self, chunk_size: usize) -> crate::str::Chunks<'_> {
+        crate::str::Chunks::new(self, chunk_size)
     }
 
     /// Splits a string slice by whitespace.
